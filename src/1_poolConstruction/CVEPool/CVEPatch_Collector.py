@@ -9,7 +9,7 @@ import time
 import random
 import re
 import tlsh
-
+import pandas as pd
 
 ## CONFIGURE ##
 jsonpath 	= './NVDjsonfeed'
@@ -23,7 +23,10 @@ homePath 	= os.getcwd()
 diffPath	= homePath + "/diffs/"
 clonePath	= homePath + "/clones/"
 vulFuncPath = homePath + "/vulFuncs/"
-ctagPath	= homePath + "/ctags"		# Ctags binary path (please specify your own ctags path)
+# ctagPath	= homePath + "/ctags"		# Ctags binary path (please specify your own ctags path)
+ctagPath 	= "/opt/homebrew/bin/ctags"
+sheetPath   = homePath + '/CVE_list.xlsx'
+cloneCommand = {}
 
 # Generate directories
 shouldMake = [diffPath, clonePath, vulFuncPath]
@@ -32,6 +35,9 @@ for eachRepo in shouldMake:
 		os.mkdir(eachRepo)
 
 vf = open(homePath + '/NVD_vulhashes', 'w')
+
+df = pd.read_excel(sheetPath, usecols="A")
+cveDict = dict.fromkeys(df['CVE'].values.tolist(), '1')
 
 URLS = {}
 META = {}
@@ -68,7 +74,11 @@ def cloningRepo(pack, clone):
 
 	try:
 		print ('[-] Now parsing ' + pack + '..')
-		result = subprocess.check_output(clone + ' ' + clonePath + pack, stderr=subprocess.STDOUT, shell=True)
+		
+		commands = clone + ' ' + clonePath + pack
+		print('Command to run:', commands)
+		cloneCommand[commands] = 1
+	# 	result = subprocess.check_output(clone + ' ' + clonePath + pack, stderr=subprocess.STDOUT, shell=True)
 	except subprocess.CalledProcessError as e:
 		print (e)
 
@@ -127,6 +137,7 @@ def getPackageName(url):
 
 
 def main():
+	cveMatchCnt = 0
 	for jsonfile in os.listdir(jsonpath):
 		with open(os.path.join(jsonpath, jsonfile), 'r', encoding = "UTF-8") as fp:
 			res     = json.load(fp)
@@ -139,6 +150,11 @@ def main():
 				CVSSv2 		= 0.0
 
 				CVEID  	 	= eachcve["cve"]["CVE_data_meta"]["ID"]
+
+				if not CVEID in cveDict:
+					continue
+				cveDict[CVEID] = '0'
+				cveMatchCnt = cveMatchCnt + 1
 
 				try:
 					CWEID   = eachcve["cve"]["problemtype"]["problemtype_data"][0]["description"][0]["value"]
@@ -167,6 +183,17 @@ def main():
 
 	print ('[+] Done: Parsing Git-related URLs from the NVD JSON feeds.')
 
+	# print("MUZHI DEBUG: Missing CVE count =", len(cveDict) - cveMatchCnt)
+	# for key, value in cveDict.items():
+	# 	if value == '1':
+	# 		print("MUZHI DEBUG: Missing CVE =", key)
+
+	# for CVE in URLS:
+	# 	for url in URLS[CVE]:
+	# 		pack, clone = getPackageName(url)
+	# 		print ('Pack: ' + pack + ' Clone: ' + clone)
+	
+	print("Finish loading json and comparing it with cve_list.xlsx")
 
 	for CVE in URLS:
 		for url in URLS[CVE]:
@@ -220,6 +247,10 @@ def main():
 
 				if flag == 1:
 					fs = open(diffPath + save_file, 'w')
+					filePath = diffPath + save_file
+					# print(save_file)
+					# if "CVE-2021-32078_CWE-125_6.6_0.diff" == save_file:
+					# 	print("Pack =", pack, "Clone =", clone)
 					fs.write("PACK:" + pack + '\n')
 					fs.write("CLONE:" + clone + '\n')
 					fs.write("URL:" + url + '\n')
@@ -231,6 +262,8 @@ def main():
 			except:
 				pass
 
+	print ('[+] Done: Cloning git repo')
+	# exit(0)
 
 	for diffs in os.listdir(diffPath):
 		os.chdir(homePath)
@@ -242,7 +275,7 @@ def main():
 			if 'PACK:' not in splitedBody[0] or 'CLONE:' not in splitedBody[1] or 'URL:' not in splitedBody[2]:
 			   continue
 
-			pack 	= body.split('\n')[0].split('PACK:')[1]
+			pack = body.split('\n')[0].split('PACK:')[1]
 			if pack =='':
 				print (diffs + '\t' + ": this vul. cannot be parsed automatically..")
 				continue
@@ -351,6 +384,7 @@ def main():
 						print ('func parsing error..')
 
 	vf.close()
+	print("Finish CVE pool construction")
 
 
 """ EXECUTE """

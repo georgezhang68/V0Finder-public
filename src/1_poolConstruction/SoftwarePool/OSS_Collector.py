@@ -10,6 +10,9 @@ import sys
 import subprocess
 import re
 import shutil
+import traceback
+import chardet
+import pandas as pd
 import tlsh # Please intall python-tlsh
 
 """GLOBALS"""
@@ -21,13 +24,28 @@ tagDatePath = currentPath + "/repo_date/"		# Default path
 resultPath	= currentPath + "/repo_functions/"	# Default path
 funcPath 	= currentPath + "/raw_functions/"	# Default path
 metaPath 	= currentPath + "/meta_files/"	# Default path
-ctagsPath	= currentPath + "/ctags" 			# Ctags binary path (please specify your own ctags path)
+sheetPath   = currentPath + "/GT_sha1.xlsx"
+resultCommitPath  = currentPath + "/resultCommit"
+softwareDown = "Software_D"
+localCommit = "LocatedPatch(es)"
+
+# ctagsPath	= currentPath + "/ctags" 			# Ctags binary path (please specify your own ctags path)
+ctagsPath 	= "/opt/homebrew/bin/ctags"
 
 # Generate directories
 shouldMake = [clonePath, tagDatePath, resultPath, funcPath, metaPath]
 for eachRepo in shouldMake:
 	if not os.path.isdir(eachRepo):
 		os.mkdir(eachRepo)
+
+
+
+def detect_file_encoding(file_path):
+    with open(file_path, 'rb') as file:
+        raw_data = file.read()
+    result = chardet.detect(raw_data)
+    encoding = result['encoding']
+    return encoding
 
 
 # Generate TLSH
@@ -52,7 +70,7 @@ def normalize(string):
 	# ref: https://github.com/squizz617/vuddy
 	return ''.join(string.replace('\n', '').replace('\r', '').replace('\t', '').replace('{', '').replace('}', '').split(' ')).lower()
 
-def hashing(repoPath, repoName, tag):
+def hashing(repoPath, repoName, commit):
 	# This function is for hashing C/C++ functions
 	# Only consider ".c", ".cc", and ".cpp" files
 	possible = (".c", ".cc", ".cpp")
@@ -80,8 +98,8 @@ def hashing(repoPath, repoName, tag):
 			if file.lower() in metas:
 				newMetaName = repoMetaPath + '/' + file
 
-				if tag != "NOTAG_MASTER":
-					newMetaName = newMetaName + '_[' + tag + ']_'
+				if commit != "NOTAG_MASTER":
+					newMetaName = newMetaName + '_[' + commit + ']_'
 				else:
 					newMetaName = newMetaName + '_[NOTAG_MASTER]_'
 
@@ -98,7 +116,10 @@ def hashing(repoPath, repoName, tag):
 					# Execute Ctgas command
 					functionList 	= subprocess.check_output(ctagsPath + ' -f - --kinds-C=* --fields=neKSt "' + filePath + '"', stderr=subprocess.STDOUT, shell=True).decode()
 
-					f = open(filePath, 'r', encoding = "UTF-8")
+					encoding = detect_file_encoding(filePath)
+					# print(encoding)
+					# f = open(filePath, 'r', encoding = "UTF-8")
+					f = open(filePath, 'r', encoding = encoding)
 
 					# For parsing functions
 					lines 		= f.readlines()
@@ -157,6 +178,8 @@ def hashing(repoPath, repoName, tag):
 					continue
 				except Exception as e:
 					print ("Subprocess failed", e)
+					print("filePath =", filePath)
+					traceback.print_exc()
 					continue
 
 	return resDict, fileCnt, funcCnt, lineCnt 
@@ -179,8 +202,37 @@ def indexing(resDict, title, filePath):
 
 	fres.close()
 
+def readExcel():
+	dict = {}
+	df = pd.read_excel(sheetPath, sheet_name="input")
+	df = df[df["index"] == "yes"]
+	for index, row in df.iterrows():
+		software = row[softwareDown]
+		commit = row[localCommit]
+		if software == "cloud_kernel":
+			software = "cloud-kernel"
+		elif software == "khadas":
+			software = "linux"
+
+		if software not in dict:
+			dict[software] = {commit}
+		else:
+			dict[software].add(commit)
+	return dict
+
+def flushResultCommit(resultCommit):
+	# Write the list to a text file
+	with open(resultCommitPath, 'w') as file:
+		for item in resultCommit:
+			file.write(str(item[0]) + "," + str(item[1]) + '\n')
+	file.close()
 
 def main():
+	dict = readExcel()
+	resultCommit = []
+
+	targetRepo = ['libsql', 'sqlcipher', 'macvim', 'neovim', 'wavpack-stream']
+
 	with open(gitCloneURLS, 'r', encoding = "UTF-8") as fp:
 		funcDateDict = {}
 		lines		 = [l.strip('\n\r') for l in fp.readlines()]
@@ -192,19 +244,28 @@ def main():
 
 			try:
 				cloneCommand 	= eachUrl + ' ' + clonePath + repoName
-				cloneResult 	= subprocess.check_output(cloneCommand, stderr = subprocess.STDOUT, shell = True).decode()
-
+				repoShortName = repoName.split("@@")[1]
+				if not repoShortName in targetRepo:
+					continue
+				# cloneResult 	= subprocess.check_output(cloneCommand, stderr = subprocess.STDOUT, shell = True).decode()
 				os.chdir(clonePath + repoName)
 
-				dateCommand 	= 'git log --tags --simplify-by-decoration --pretty="format:%ai %d"'  # For storing tag dates
-				dateResult		= subprocess.check_output(dateCommand, stderr = subprocess.STDOUT, shell = True).decode()
-				tagDateFile 	= open(tagDatePath + repoName, 'w')
-				tagDateFile.write(str(dateResult))
-				tagDateFile.close()
+				# if not repoShortName in ["libsql", "macvim", "neovim", "sqlcipher", "wavpack-stream"]:
+				# 	continue
+				print(repoName)
+				patchCommits = dict[repoShortName]
 
+				# dateCommand 	= 'git log --tags --simplify-by-decoration --pretty="format:%ai %d"'  # For storing tag dates
+				# dateResult		= subprocess.check_output(dateCommand, stderr = subprocess.STDOUT, shell = True).decode()
+				
+				# tagDateFile 	= open(tagDatePath + repoName, 'w')
+				# tagDateFile.write(str(dateResult))
+				# tagDateFile.close()
 
-				tagCommand		= "git tag"
-				tagResult		= subprocess.check_output(tagCommand, stderr = subprocess.STDOUT, shell = True).decode()
+				# show latest tag: git describe --tags $(git rev-list --tags --max-count=1)
+				# tagCommand		= "git describe --tags $(git rev-list --tags --max-count=1)"
+				# tagCommand		= "git tag"
+				# tagResult		= subprocess.check_output(tagCommand, stderr = subprocess.STDOUT, shell = True).decode()
 
 				resDict = {}
 				fileCnt = 0
@@ -216,10 +277,12 @@ def main():
 					os.mkdir(funcPath + repoName)	
 
 
-				if tagResult == "":
+				if patchCommits == "":
 					# No tags, only master repo
+					print("Processing")
 											 
 					resDict, fileCnt, funcCnt, lineCnt = hashing(clonePath + repoName, repoName, "NOTAG_MASTER")
+					print("Finish hashing, length =", len(resDict))
 					if len(resDict) > 0:
 						if not os.path.isdir(resultPath + repoName):
 							os.mkdir(resultPath + repoName)
@@ -229,17 +292,25 @@ def main():
 						indexing(resDict, title, resultFilePath)
 
 				else:
-					for tag in str(tagResult).split('\n'):
+					# limit = 5
+					# cnt = 0
+					for commit in patchCommits:
+						# cnt = cnt + 1
+						# if cnt > limit:
+						# 	break
+						print(commit)
+						resultCommit.append([commit, repoShortName])
 						# Generate function hashes for each tag (version)
+						checkoutCommand	= subprocess.check_output("git checkout -f " + commit + "~",
+												stderr = subprocess.STDOUT, shell = True)
 
-						checkoutCommand	= subprocess.check_output("git checkout -f " + tag, stderr = subprocess.STDOUT, shell = True)
-						resDict, fileCnt, funcCnt, lineCnt = hashing(clonePath + repoName, repoName, tag)
+						resDict, fileCnt, funcCnt, lineCnt = hashing(clonePath + repoName, repoName, commit)
 						
 						if len(resDict) > 0:
 							if not os.path.isdir(resultPath + repoName):
 								os.mkdir(resultPath + repoName)
 							title = '\t'.join([repoName, str(fileCnt), str(funcCnt), str(lineCnt)])
-							resultFilePath 	= resultPath + repoName + '/fuzzy_' + tag + '.hidx'
+							resultFilePath 	= resultPath + repoName + '/fuzzy_' + commit + '.hidx'
 						
 							indexing(resDict, title, resultFilePath)
 						
@@ -250,6 +321,10 @@ def main():
 			except Exception as e:
 				print ("Subprocess failed", e)
 				continue
+	print("Handle Commit", resultCommit)
+
+	flushResultCommit(resultCommit)
+
 
 """ EXECUTE """
 if __name__ == "__main__":

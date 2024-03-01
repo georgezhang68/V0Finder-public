@@ -34,8 +34,11 @@ def main():
 			vulInfo = each.split('\t')[1]
 			vulDict[vulHash] = vulInfo
 
-
+	targetRepo = ['libsql', 'sqlcipher', 'macvim', 'neovim', 'wavpack-stream']
 	for oss in os.listdir(repoPath):
+		if oss.split("@@")[1] not in targetRepo:
+			continue
+		print(oss)
 		ossHashes = []
 
 		for files in os.listdir(repoPath + oss):
